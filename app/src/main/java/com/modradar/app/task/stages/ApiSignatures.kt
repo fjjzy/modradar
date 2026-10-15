@@ -58,6 +58,22 @@ object ApiSignatures {
         "Landroid/database/sqlite/SQLiteDatabase;->rawQuery" to "rawQuery 拼接",
     )
 
+    /**
+     * 几乎所有应用都会用到的「弱汇点 / 弱变换」：反射、loadLibrary、WebView 加载、哈希校验等。
+     * 它们单独出现不说明问题，计入能力链只会制造大量误报，因此不参与 C1–C5 判定。
+     */
+    val WEAK: Set<String> = setOf(
+        "反射 invoke", "Class.forName", "System.loadLibrary", "PathClassLoader", "BaseDexClassLoader",
+        "WebView.loadUrl", "evaluateJavascript", "rawQuery 拼接", "chmod",
+        "MessageDigest", "Mac",
+    )
+
+    /** 远端数据来源：只有这些来源 + 强汇点才构成「远端取代码 → 本地执行」。 */
+    val REMOTE_SOURCES: Set<String> = setOf(
+        "OkHttp", "Okio", "HttpURLConnection", "java.net.URL", "Socket",
+        "ServerSocket", "DatagramSocket", "DownloadManager", "URLConnection", "WebView",
+    )
+
     fun classifyMethod(definingClass: String, name: String): Triple<Set<String>, Set<String>, Set<String>> {
         val sig = definingClass + "->" + name
         val s = mutableSetOf<String>()

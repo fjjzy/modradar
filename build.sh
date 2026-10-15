@@ -9,7 +9,7 @@ BT="$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)"
 KEYSTORE="${KEYSTORE:-$HOME/Documents/Dsh/apk_work/release.keystore}"
 KS_PASS="${KS_PASS:-dshpass123}"
 KEY_ALIAS="${KEY_ALIAS:-dsh}"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.5.0}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"

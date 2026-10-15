@@ -52,4 +52,6 @@ data class ChatMessageEntity(
     val content: String,
     val toolCallsJson: String? = null,
     val createdAt: Long,
+    /** 模型的思考过程（reasoning_content），只展示不回放。 */
+    val reasoning: String? = null,
 )

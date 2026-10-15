@@ -56,10 +56,55 @@ class ScoreRulesKsuTest {
         val r = ScoreRules.evaluate(
             ex(
                 mod = KsuModuleInfo("m", "M", missingFields = listOf("versionCode")),
-                risks = listOf("post-fs-data.sh: 修改系统属性", "service.sh: bind 挂载系统路径"),
+                risks = listOf("service.sh: 下载后直接执行（管道）", "post-fs-data.sh: 关闭 SELinux"),
             ),
             null,
         )
         assertEquals(65, r.score)
+    }
+
+    @Test
+    fun `改属性与挂载是模块本职只提示不扣分`() {
+        val r = ScoreRules.evaluate(
+            ex(
+                mod = KsuModuleInfo("m", "M"),
+                risks = listOf("post-fs-data.sh: 修改系统属性", "service.sh: bind 挂载系统路径", "service.sh: 后台常驻进程"),
+            ),
+            null,
+            "KSU_MODULE",
+        )
+        assertEquals(100, r.score)
+        assertTrue(r.findings.none { it.ruleId == "KSU_SCRIPT" })
+        val ops = r.findings.single { it.ruleId == "KSU_OPS" }
+        assertTrue(ops.expected)
+        assertEquals(0, ops.deduction)
+    }
+
+    @Test
+    fun `KSU 模块 zip 无签名只提示不扣分`() {
+        val r = ScoreRules.evaluate(ExtractArtifact(ksuModule = KsuModuleInfo("m", "M")), null, "KSU_MODULE")
+        assertEquals(100, r.score)
+        val f = r.findings.single { it.ruleId == "SIG_NONE" }
+        assertTrue(f.expected && f.deduction == 0)
+    }
+
+    @Test
+    fun `APK 无签名仍扣 25`() {
+        val r = ScoreRules.evaluate(ExtractArtifact(), null, "APK")
+        assertTrue(r.findings.any { it.ruleId == "SIG_NONE" && it.deduction == -25 })
+    }
+
+    @Test
+    fun `LSPatch 重打包扣 15 并列出内嵌模块`() {
+        val r = ScoreRules.evaluate(
+            ExtractArtifact(
+                v1Signed = true, apkSigningBlock = true, signerSha256 = "bb",
+                lspatch = LsPatchInfo(modules = listOf("com.example.mod.apk"), originSignerSha256 = "aa"),
+            ),
+            null, "APK",
+        )
+        val f = r.findings.single { it.ruleId == "LSPATCH" }
+        assertEquals(-15, f.deduction)
+        assertTrue(f.detail.contains("com.example.mod.apk") && f.detail.contains("签名已"))
     }
 }

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  允许明文 HTTP：用户可能把 AI 接口配成局域网 / 本机服务（Ollama、LM Studio、自建网关等）。
+  公网 http 地址在 AI 设置页会显式提示「Key 可能被窃听」。应用自身不访问任何内置地址。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

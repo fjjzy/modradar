@@ -72,6 +72,28 @@ object StringFacts {
         "firebaseio.com" to "Firebase",
     )
 
+    /** XML 命名空间、规范文档、本机地址等「不会真正发起请求」的 URL 主机。 */
+    private val NOISE_HOSTS = listOf(
+        "android.com", "w3.org", "xmlpull.org", "apache.org", "adobe.com", "xmlsoap.org",
+        "microsoft.com", "purl.org", "json-schema.org", "xml.org", "openxmlformats.org",
+        "sun.com", "jcp.org", "exslt.org", "relaxng.org", "wapforum.org", "example.com",
+        "example.org", "example.net", "localhost", "127.0.0.1", "0.0.0.0", "10.0.2.2",
+        "schema.org", "jabber.org", "ietf.org", "oasis-open.org", "openmobilealliance.org",
+    )
+
+    /**
+     * 只保留像真实请求目标的 URL：去掉空 URL（"http://"）、格式化占位（%s / {host}）、
+     * 无点号主机、XML 命名空间和规范文档域名。
+     */
+    fun isMeaningfulUrl(url: String): Boolean {
+        val rest = url.substringAfter("://", "")
+        val host = rest.takeWhile { it != '/' && it != '?' && it != '#' && it != ':' }.lowercase()
+        if (host.length < 4 || '.' !in host && host != "localhost") return false
+        if (host.any { it == '%' || it == '{' || it == '$' || it == '<' || it.isWhitespace() }) return false
+        if (host.startsWith('.') || host.endsWith('.')) return false
+        return NOISE_HOSTS.none { host == it || host.endsWith(".$it") }
+    }
+
     fun matchTracker(text: String): Set<String> =
         TRACKER_KEYWORDS.filter { text.contains(it.first) }.map { it.second }.toSet()
 

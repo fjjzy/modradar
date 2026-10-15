@@ -10,16 +10,27 @@ import com.modradar.app.task.Stage
 import com.modradar.app.task.TaskRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import java.util.UUID
 
 sealed interface ChatEvent {
     data class AssistantText(val text: String) : ChatEvent
-    data class ToolStarted(val name: String, val args: String) : ChatEvent
-    data class ToolFinished(val name: String, val result: String, val notReady: Boolean) : ChatEvent
+    /** 流式输出中：累计正文与思考（已节流）。 */
+    data class Streaming(val content: String, val reasoning: String) : ChatEvent
+    /** 有消息落库（用户消息、带 tool_calls 的一轮），界面据此刷新历史。 */
+    data object RoundDone : ChatEvent
+    data class ToolStarted(val id: String, val name: String, val args: String) : ChatEvent
+    data class ToolFinished(val id: String, val name: String, val result: String, val notReady: Boolean, val ms: Long) : ChatEvent
     data class Failed(val message: String) : ChatEvent
 }
+
+/** tool 消息的元数据（存于 toolCallsJson）。 */
+@Serializable
+data class ToolMsgMeta(val id: String, val name: String, val ms: Long = 0, val notReady: Boolean = false)
 
 /**
  * 对话引擎。
@@ -27,6 +38,9 @@ sealed interface ChatEvent {
  * 关键点：**与流水线状态解耦**。分析暂停、失败或未跑完时都能进入，
  * 工具按 [ToolRegistry] 的阶段门控返回 data_not_ready，
  * system prompt 追加「部分数据模式」，保证结论不越界。
+ *
+ * 历史回放必须保留 assistant.tool_calls 与 tool.tool_call_id 的配对，
+ * 否则 OpenAI 兼容接口会在第二轮直接返回 400。
  */
 class ChatEngine(
     private val repo: TaskRepository,
@@ -52,6 +66,8 @@ class ChatEngine(
     suspend fun history(sessionId: String): List<ChatMessageEntity> =
         db.chatDao().messages(sessionId)
 
+    suspend fun clear(sessionId: String) = db.chatDao().deleteMessages(sessionId)
+
     suspend fun send(
         taskId: String,
         sessionId: String,
@@ -60,13 +76,13 @@ class ChatEngine(
         maxRounds: Int = 12,
         onEvent: (ChatEvent) -> Unit,
     ) = withContext(Dispatchers.IO) {
-        val now = System.currentTimeMillis()
-        db.chatDao().insertMessage(
-            ChatMessageEntity(sessionId = sessionId, role = "user", content = userText, createdAt = now)
-        )
+        insert(sessionId, "user", userText)
+        onEvent(ChatEvent.RoundDone)
 
         if (!settings.configured) {
-            onEvent(ChatEvent.Failed("尚未配置 AI：请到设置里填写 API 地址、Key 与模型"))
+            val msg = AiError(AiError.Kind.NOT_CONFIGURED).userMessage
+            insert(sessionId, "assistant", "（$msg）")
+            onEvent(ChatEvent.Failed(msg))
             return@withContext
         }
 
@@ -76,76 +92,73 @@ class ChatEngine(
         var round = 0
         while (round < maxRounds) {
             round++
+            var last = 0L
             val resp = try {
-                client.chat(messages, registry.toolsJson())
+                client.chatStream(messages, registry.toolsJson()) { c, r ->
+                    val now = System.currentTimeMillis()
+                    if (now - last >= STREAM_THROTTLE_MS) { last = now; onEvent(ChatEvent.Streaming(c, r)) }
+                }
             } catch (t: Throwable) {
-                onEvent(ChatEvent.Failed(t.message ?: "AI 调用失败"))
-                db.chatDao().insertMessage(
-                    ChatMessageEntity(
-                        sessionId = sessionId,
-                        role = "assistant",
-                        content = "（AI 调用失败：${t.message}）",
-                        createdAt = System.currentTimeMillis(),
-                    )
-                )
+                val msg = AiError.fromThrowable(t).userMessage
+                onEvent(ChatEvent.Failed(msg))
+                insert(sessionId, "assistant", "（AI 调用失败）\n$msg")
                 return@withContext
             }
 
             if (resp.toolCalls.isEmpty()) {
-                val text = resp.content.orEmpty()
+                val text = resp.content.orEmpty().ifBlank { "（模型返回了空内容）" }
+                insert(sessionId, "assistant", text, reasoning = resp.reasoning)
                 onEvent(ChatEvent.AssistantText(text))
-                db.chatDao().insertMessage(
-                    ChatMessageEntity(
-                        sessionId = sessionId,
-                        role = "assistant",
-                        content = text,
-                        createdAt = System.currentTimeMillis(),
-                    )
-                )
                 return@withContext
             }
 
-            // 记录 assistant 的工具调用消息
             messages += ChatMsg(role = "assistant", content = resp.content, toolCalls = resp.toolCalls)
-            db.chatDao().insertMessage(
-                ChatMessageEntity(
-                    sessionId = sessionId,
-                    role = "assistant",
-                    content = resp.content.orEmpty(),
-                    toolCallsJson = json.encodeToString(
-                        kotlinx.serialization.builtins.ListSerializer(ToolCallReq.serializer()),
-                        resp.toolCalls,
-                    ),
-                    createdAt = System.currentTimeMillis(),
-                )
+            insert(
+                sessionId, "assistant", resp.content.orEmpty(),
+                json.encodeToString(ListSerializer(ToolCallReq.serializer()), resp.toolCalls),
+                reasoning = resp.reasoning,
             )
+            onEvent(ChatEvent.RoundDone)
 
             for (call in resp.toolCalls) {
-                onEvent(ChatEvent.ToolStarted(call.name, call.arguments))
-                val args = runCatching { json.parseToJsonElement(call.arguments).let { it as JsonObject } }
+                onEvent(ChatEvent.ToolStarted(call.id, call.name, call.arguments))
+                val args = runCatching { json.parseToJsonElement(call.arguments) as JsonObject }
                     .getOrElse { JsonObject(emptyMap()) }
-                val result = registry.invoke(taskId, call.name, args)
+                val t0 = System.currentTimeMillis()
+                // 单工具 20s 超时，返回截断，避免撑爆上下文
+                val result = withTimeoutOrNull(TOOL_TIMEOUT_MS) { registry.invoke(taskId, call.name, args) }
+                    ?: ToolResult.Error("工具执行超时（${TOOL_TIMEOUT_MS / 1000}s）")
+                val ms = System.currentTimeMillis() - t0
                 val (text, notReady) = when (result) {
-                    is ToolResult.Ok -> result.content to false
+                    is ToolResult.Ok -> result.content.take(MAX_TOOL_CHARS) to false
                     is ToolResult.NotReady -> result.toJson() to true
                     is ToolResult.Error -> """{"error":"${result.message.replace("\"", "'")}"}""" to false
                 }
-                onEvent(ChatEvent.ToolFinished(call.name, text, notReady))
+                onEvent(ChatEvent.ToolFinished(call.id, call.name, text, notReady, ms))
 
                 messages += ChatMsg(role = "tool", content = text, toolCallId = call.id)
-                db.chatDao().insertMessage(
-                    ChatMessageEntity(
-                        sessionId = sessionId,
-                        role = "tool",
-                        content = text,
-                        toolCallsJson = call.name,
-                        createdAt = System.currentTimeMillis(),
-                    )
-                )
+                insert(sessionId, "tool", text, json.encodeToString(ToolMsgMeta.serializer(), ToolMsgMeta(call.id, call.name, ms, notReady)))
+                // 落库后再通知刷新，否则界面可能先读到不含这条结果的历史
+                onEvent(ChatEvent.RoundDone)
             }
         }
 
-        onEvent(ChatEvent.Failed("已达到工具调用轮次上限（$maxRounds 轮）"))
+        val msg = "已达到工具调用轮次上限（$maxRounds 轮），可以继续追问让 AI 接着分析"
+        insert(sessionId, "assistant", "（$msg）")
+        onEvent(ChatEvent.Failed(msg))
+    }
+
+    private suspend fun insert(sessionId: String, role: String, content: String, meta: String? = null, reasoning: String? = null) {
+        db.chatDao().insertMessage(
+            ChatMessageEntity(
+                sessionId = sessionId,
+                role = role,
+                content = content,
+                toolCallsJson = meta,
+                createdAt = System.currentTimeMillis(),
+                reasoning = reasoning?.ifBlank { null },
+            )
+        )
     }
 
     /** 组装消息：P0 + （未跑完时）P8 部分数据 + 历史。 */
@@ -158,6 +171,8 @@ class ChatEngine(
 
         val system = buildString {
             append(Prompts.P0_SYSTEM)
+            append("\n\n")
+            append(Prompts.P0_CHAT_HTML)
             if (!finished) {
                 append("\n\n")
                 append(Prompts.p8PartialData(completed.toList(), pending, pausedAt))
@@ -168,13 +183,56 @@ class ChatEngine(
         }
 
         val out = mutableListOf(ChatMsg(role = "system", content = system))
-        db.chatDao().messages(sessionId).forEach { m ->
-            when (m.role) {
-                "user" -> out += ChatMsg(role = "user", content = m.content)
-                "assistant" -> out += ChatMsg(role = "assistant", content = m.content.ifBlank { null })
-                "tool" -> out += ChatMsg(role = "tool", content = m.content)
-            }
-        }
+        out += replay(db.chatDao().messages(sessionId))
         return out
+    }
+
+    companion object {
+        const val TOOL_TIMEOUT_MS = 20_000L
+        const val MAX_TOOL_CHARS = 6_000
+        const val STREAM_THROTTLE_MS = 80L
+
+        private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        /** 历史 → 请求消息；丢弃无法配对的 tool_calls / tool 消息（兼容旧版本存储）。 */
+        fun replay(history: List<ChatMessageEntity>): List<ChatMsg> {
+            val raw = history.map { m ->
+                when (m.role) {
+                    "assistant" -> {
+                        val calls = m.toolCallsJson?.let {
+                            runCatching { json.decodeFromString(ListSerializer(ToolCallReq.serializer()), it) }.getOrNull()
+                        }
+                        ChatMsg("assistant", m.content.ifBlank { null }, toolCalls = calls?.takeIf { it.isNotEmpty() })
+                    }
+                    "tool" -> {
+                        val meta = m.toolCallsJson?.let {
+                            runCatching { json.decodeFromString(ToolMsgMeta.serializer(), it) }.getOrNull()
+                        }
+                        ChatMsg("tool", m.content, toolCallId = meta?.id)
+                    }
+                    else -> ChatMsg(m.role, m.content)
+                }
+            }
+            val answered = raw.filter { it.role == "tool" }.mapNotNull { it.toolCallId }.toSet()
+            val out = mutableListOf<ChatMsg>()
+            var openIds = emptySet<String>()
+            for (m in raw) {
+                when {
+                    m.role == "assistant" && m.toolCalls != null -> {
+                        val ids = m.toolCalls.map { it.id }.toSet()
+                        if (answered.containsAll(ids)) {
+                            out += m; openIds = ids
+                        } else {
+                            openIds = emptySet()
+                            if (!m.content.isNullOrBlank()) out += m.copy(toolCalls = null)
+                        }
+                    }
+                    m.role == "tool" -> if (m.toolCallId != null && m.toolCallId in openIds) out += m
+                    m.role == "assistant" && m.content == null -> Unit
+                    else -> { out += m; openIds = emptySet() }
+                }
+            }
+            return out
+        }
     }
 }

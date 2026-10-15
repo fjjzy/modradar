@@ -20,32 +20,31 @@ class ReportStage : StageRunner {
     ) = withContext(Dispatchers.IO) {
         onProgress(15, "读取各阶段产物")
 
-        val load = ctx.read("${Stage.LOAD.id}.json")
-            ?.let { runCatching { json.decodeFromString<LoadArtifact>(it) }.getOrNull() }
-        val extract = ctx.read("${Stage.EXTRACT.id}.json")
-            ?.let { runCatching { json.decodeFromString<ExtractArtifact>(it) }.getOrNull() }
-        val chain = ctx.read("${Stage.CHAIN.id}.json")
-            ?.let { runCatching { json.decodeFromString<ChainArtifact>(it) }.getOrNull() }
-        val score = ctx.read("${Stage.SCORE.id}.json")
-            ?.let { runCatching { json.decodeFromString<ScoreArtifact>(it) }.getOrNull() }
-        val ai = ctx.read("${Stage.AI.id}.json")
-            ?.let { runCatching { json.decodeFromString<AiReviewArtifact>(it) }.getOrNull() }
-
         ctx.checkPause()
         onProgress(70, "汇总报告")
-
-        val report = ReportBuilder.build(
-            targetName = ctx.targetName,
-            targetKind = ctx.targetKind.name,
-            load = load,
-            extract = extract,
-            chain = chain,
-            score = score,
-            ai = ai,
-            generatedAt = System.currentTimeMillis(),
-        )
+        val report = assemble(ctx::read, ctx.targetName, ctx.targetKind.name)
         ctx.write(ctx.artifactName(stage), json.encodeToString(report))
 
         onProgress(100, "报告生成完成 · ${report.score} 分（${report.level}）")
+    }
+
+    companion object {
+        private val json = Json { ignoreUnknownKeys = true }
+
+        /** 从各阶段产物汇总报告；报告页「重新核验来源」后也用它重建 S6。 */
+        fun assemble(read: (String) -> String?, targetName: String, targetKind: String): ReportArtifact {
+            fun <T> load(name: String, de: (String) -> T): T? = read(name)?.let { runCatching { de(it) }.getOrNull() }
+            return ReportBuilder.build(
+                targetName = targetName,
+                targetKind = targetKind,
+                load = load("${Stage.LOAD.id}.json") { json.decodeFromString<LoadArtifact>(it) },
+                extract = load("${Stage.EXTRACT.id}.json") { json.decodeFromString<ExtractArtifact>(it) },
+                chain = load("${Stage.CHAIN.id}.json") { json.decodeFromString<ChainArtifact>(it) },
+                score = load("${Stage.SCORE.id}.json") { json.decodeFromString<ScoreArtifact>(it) },
+                ai = load("${Stage.AI.id}.json") { json.decodeFromString<AiReviewArtifact>(it) },
+                generatedAt = System.currentTimeMillis(),
+                provenance = load(ProvenanceArtifact.FILE) { json.decodeFromString<ProvenanceArtifact>(it) },
+            )
+        }
     }
 }

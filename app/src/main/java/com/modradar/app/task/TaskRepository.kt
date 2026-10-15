@@ -99,6 +99,11 @@ class TaskRepository(private val db: ModRadarDb) {
         taskDao.upsert(t.copy(score = score, riskLevel = level, updatedAt = System.currentTimeMillis()))
     }
 
+    suspend fun setKind(id: String, kind: String) {
+        val t = taskDao.byId(id) ?: return
+        if (t.targetKind != kind) taskDao.upsert(t.copy(targetKind = kind))
+    }
+
     suspend fun delete(id: String) {
         cpDao.deleteByTask(id)
         db.chatDao().deleteSessionsByTask(id)

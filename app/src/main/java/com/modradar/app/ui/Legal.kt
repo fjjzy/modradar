@@ -62,7 +62,7 @@ fun LegalDocDialog(
                     .heightIn(max = 460.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text(content, style = MaterialTheme.typography.bodySmall)
+                com.modradar.app.ui.components.Markdown(content, style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },

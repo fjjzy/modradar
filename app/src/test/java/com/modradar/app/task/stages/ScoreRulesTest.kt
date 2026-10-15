@@ -194,8 +194,47 @@ class ScoreRulesTest {
     }
 
     @Test
-    fun `AI 结论不计入分数的说明存在`() {
-        val r = ScoreRules.evaluate(extract(), null)
-        assertTrue(r.notes.any { it.contains("AI 结论不计入") })
+    fun `同一能力链规则多处命中只扣一次`() {
+        val chain = ChainArtifact(
+            hits = listOf(
+                ChainHit("C1", "同方法执行", -35, sources = listOf("URL"), sinks = listOf("exec")),
+                ChainHit("C1", "同方法执行", -35, sources = listOf("Socket"), sinks = listOf("exec")),
+                ChainHit("C1", "同方法执行", -35),
+                ChainHit("C2", "调用链可达", -25),
+            ),
+        )
+        val r = ScoreRules.evaluate(null, chain)
+        val c1 = r.findings.single { it.ruleId == "C1" }
+        assertEquals(-35, c1.deduction)
+        assertTrue(c1.detail.contains("共 3 处"))
+        assertTrue(c1.detail.contains("URL") && c1.detail.contains("Socket"))
+        assertEquals(40, r.score)
+    }
+
+    private val hookChain = ChainArtifact(
+        hits = listOf(ChainHit("C3", "存在执行/加载能力", -10, sinks = listOf("DexClassLoader"))),
+        antiDebugHits = listOf("Xposed 检测", "Magisk 检测"),
+    )
+
+    @Test
+    fun `Xposed 模块的加载能力与 Xposed 关键字只提示不扣分`() {
+        val r = ScoreRules.evaluate(extract(), hookChain, "XPOSED_MODULE")
+        assertEquals(100, r.score)
+        assertTrue(r.findings.filter { it.ruleId in setOf("C3", "ANTIDEBUG") }.all { it.expected && it.deduction == 0 })
+        assertTrue(r.notes.any { it.contains("模块上下文降噪") })
+    }
+
+    @Test
+    fun `普通 APK 的同样特征照常扣分`() {
+        val r = ScoreRules.evaluate(extract(), hookChain, "APK")
+        assertEquals(80, r.score)
+        assertTrue(r.findings.none { it.expected })
+    }
+
+    @Test
+    fun `Xposed 模块 native hook 库不按 C8 扣分`() {
+        val ex = extract().copy(nativeImports = listOf(NativeLibImports("lib/arm64-v8a/liblsplant.so", c8 = true)))
+        assertEquals(100, ScoreRules.evaluate(ex, null, "XPOSED_MODULE").score)
+        assertEquals(80, ScoreRules.evaluate(ex, null, "APK").score)
     }
 }

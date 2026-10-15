@@ -12,6 +12,9 @@ class ApkReader(private val file: File) : AutoCloseable {
 
     fun has(name: String): Boolean = zip.getEntry(name) != null
 
+    /** 条目解压后大小；未知返回 -1。 */
+    fun size(name: String): Long = zip.getEntry(name)?.size ?: -1L
+
     fun read(name: String): ByteArray? = try {
         val e = zip.getEntry(name)
         if (e == null) null else zip.getInputStream(e).use { it.readBytes() }

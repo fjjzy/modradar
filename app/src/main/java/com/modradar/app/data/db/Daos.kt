@@ -25,6 +25,9 @@ interface TaskDao {
     @Query("SELECT * FROM tasks WHERE state = 'RUNNING' ORDER BY updatedAt DESC")
     suspend fun running(): List<AnalysisTaskEntity>
 
+    @Query("SELECT * FROM tasks ORDER BY updatedAt DESC")
+    suspend fun all(): List<AnalysisTaskEntity>
+
     @Query("DELETE FROM tasks WHERE id = :id")
     suspend fun delete(id: String)
 }
@@ -65,6 +68,9 @@ interface ChatDao {
 
     @Query("SELECT * FROM chat_messages WHERE sessionId = :sessionId ORDER BY createdAt ASC, id ASC")
     fun observeMessages(sessionId: String): Flow<List<ChatMessageEntity>>
+
+    @Query("SELECT * FROM chat_sessions WHERE taskId = :taskId ORDER BY createdAt ASC")
+    suspend fun sessionsForTask(taskId: String): List<ChatSessionEntity>
 
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun deleteMessages(sessionId: String)

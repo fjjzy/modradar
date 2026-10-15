@@ -13,13 +13,18 @@ android {
     defaultConfig {
         applicationId = "com.modradar.app"
         minSdk = 24
-        targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        targetSdk = 34
+        versionCode = 5
+        versionName = "0.5.0"
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     compileOptions {
@@ -54,6 +59,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended:1.7.8")
+    implementation("androidx.navigation3:navigation3-runtime:1.1.7")
+    implementation("androidx.navigation3:navigation3-ui:1.1.7")
     implementation("androidx.activity:activity-compose:1.12.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
@@ -74,4 +82,5 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

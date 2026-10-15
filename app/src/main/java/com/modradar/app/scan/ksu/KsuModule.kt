@@ -19,6 +19,8 @@ data class KsuModuleInfo(
     val scripts: List<String> = emptyList(),
     /** 缺失的必备字段。 */
     val missingFields: List<String> = emptyList(),
+    /** module.prop 的 updateJson（多指向作者 GitHub，来源核验用）。 */
+    val updateJson: String? = null,
 )
 
 /** module.prop 解析（KSU 与 Magisk 通用格式）。 */
@@ -51,6 +53,7 @@ object ModuleProp {
             enabled = enabled,
             scripts = scripts,
             missingFields = missingFields(props),
+            updateJson = props["updateJson"]?.takeIf { it.startsWith("https://") },
         )
 }
 
@@ -82,6 +85,18 @@ object ScriptRisk {
         Regex("""/data/adb/.*\.sh""", RegexOption.IGNORE_CASE) to "引用 /data/adb 下脚本",
         Regex("""nohup|&\s*$""", RegexOption.IGNORE_CASE) to "后台常驻进程",
     )
+
+    /**
+     * 模块的「日常操作」：改属性、bind 挂载、调用自身脚本、后台常驻、改权限、写 /system 覆盖层。
+     * 这些是 KSU/Magisk 模块的本职工作，只作提示，不计入危险扣分。
+     */
+    val NORMAL_LABELS: Set<String> = setOf(
+        "修改系统属性", "bind 挂载系统路径", "引用 /data/adb 下脚本", "后台常驻进程",
+        "授予 777 权限", "直接写入系统分区",
+    )
+
+    /** "service.sh: 下载后直接执行（管道）" 这类条目是否属于日常操作。 */
+    fun isNormal(entry: String): Boolean = NORMAL_LABELS.any { entry.contains(it) }
 
     fun scan(content: String): List<Hit> {
         val hits = mutableListOf<Hit>()

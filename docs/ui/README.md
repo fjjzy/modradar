@@ -1,12 +1,27 @@
 # ModRadar UI 原型图（12 屏）
 
+[返回主 README](../../README.md) · [English](../../README_EN.md)
+
+> **这里是设计阶段的 AI 生成原型图，不是真实界面。**
+> 真实界面截图（模拟器实拍）见 [`../screenshots/`](../screenshots/)，总览：[gallery.png](../screenshots/gallery.png)。
+
 > 依据 [../计划.md](../计划.md) 的界面清单生成，覆盖全部界面与关键运行时状态。
 > 生成方式：`work-image-gen` / `sws-gemini`（Nano Banana Pro），2K 竖屏 9:16。
 > Prompt 源文件：[prompts.py](prompts.py) ｜ 批量脚本：[gen_ui.py](gen_ui.py)
+> 合成脚本：[../../tools/make_assets.py](../../tools/make_assets.py)（图标 + 预览图，可重复执行）
+
+## 速览
+
+![预览条](preview.png)
+
+![全部界面](gallery.png)
 
 ## 视觉基调
 
 纯黑深色主题（#000000）+ Material 3 + 圆角卡片 + 蓝紫强调色，对齐 gkd-plus 的风格取向。
+
+> 说明：部分出图原本带浅色外框，合成预览时已把与边缘连通的浅色背景泛洪成深色底，
+> 因此单屏原图与预览图底色可能不同。
 
 ---
 

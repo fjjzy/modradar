@@ -13,16 +13,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,7 +39,6 @@ import com.modradar.app.service.KeepAliveState
  * 后台保活引导：四项检测 + 一键跳转。
  * 厂商白名单与最近任务锁定都没有公开 API，只能引导。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun KeepAliveScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
@@ -55,12 +54,7 @@ fun KeepAliveScreen(onBack: () -> Unit) {
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("后台保活") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("返回") } },
-            )
-        },
+        topBar = { com.modradar.app.ui.components.MrTopBar("后台保活", onBack = onBack) },
     ) { pad ->
         Column(
             modifier = Modifier
@@ -161,9 +155,19 @@ private fun StepCard(
     onAction: () -> Unit,
     unknown: Boolean = false,
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.Icon(
+                    when {
+                        done -> androidx.compose.material.icons.Icons.Outlined.CheckCircle
+                        unknown -> androidx.compose.material.icons.Icons.Outlined.TouchApp
+                        else -> androidx.compose.material.icons.Icons.Outlined.RadioButtonUnchecked
+                    },
+                    contentDescription = null,
+                    tint = if (done) com.modradar.app.ui.theme.RiskColors.Low else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.padding(start = 10.dp))
                 Text("$index. $title", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.weight(1f))
                 val tag = when {

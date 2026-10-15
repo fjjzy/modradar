@@ -82,13 +82,14 @@ class ChainStage : StageRunner {
                                     val callee = ref.definingClass + "->" + ref.name
                                     node.callees.add(callee)
                                     val (s, t, k) = ApiSignatures.classifyMethod(ref.definingClass, ref.name)
-                                    node.sources.addAll(s)
-                                    node.transforms.addAll(t)
-                                    node.sinks.addAll(k)
+                                    // 只记远端来源与强变换/强汇点，弱信号见 ApiSignatures.WEAK
+                                    s.filterTo(node.sources) { it in ApiSignatures.REMOTE_SOURCES }
+                                    t.filterTo(node.transforms) { it !in ApiSignatures.WEAK }
+                                    k.filterTo(node.sinks) { it !in ApiSignatures.WEAK }
                                 }
                                 is StringReference -> {
                                     val v = ref.string
-                                    if (v.startsWith("http://") || v.startsWith("https://")) {
+                                    if ((v.startsWith("http://") || v.startsWith("https://")) && StringFacts.isMeaningfulUrl(v)) {
                                         if (httpUrls.size < MAX_URLS) httpUrls.add(v) else truncated = true
                                     }
                                     if (allStrings.size < MAX_STRINGS) allStrings.add(v)
@@ -174,9 +175,7 @@ class ChainStage : StageRunner {
         }
 
         // C4：网络能力与 exec/动态加载并存（弱证据）
-        val hasNetwork = sourceMethods.any { n ->
-            n.sources.any { it in NETWORK_LABELS }
-        }
+        val hasNetwork = sourceMethods.isNotEmpty()
         val execSinks = sinkMethods.flatMap { it.sinks }.toSet()
         if (hasNetwork && execSinks.isNotEmpty() && c1.isEmpty() && c2Count == 0) {
             hits += ChainHit(
@@ -281,10 +280,5 @@ class ChainStage : StageRunner {
         const val MAX_METHODS = 300_000
         const val MAX_URLS = 2_000
         const val MAX_STRINGS = 80_000
-
-        val NETWORK_LABELS = setOf(
-            "OkHttp", "Okio", "HttpURLConnection", "java.net.URL", "Socket",
-            "ServerSocket", "DatagramSocket", "DownloadManager", "URLConnection",
-        )
     }
 }

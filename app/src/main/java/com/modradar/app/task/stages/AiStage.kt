@@ -7,6 +7,8 @@ import com.modradar.app.task.Stage
 import com.modradar.app.task.StageContext
 import com.modradar.app.task.StageRunner
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -15,9 +17,13 @@ import kotlinx.serialization.json.Json
  *
  * 注意：**未配置 AI 不算失败**——写入 status=NOT_CONFIGURED 后正常完成，
  * 保证「本地分析照常跑完，报告标注未完成 AI 研判」。
- * AI 结论不计入总分（由 S6 与 ScoreRules 保证）。
+ * 输出按 P7 协议解析为 [AiVerdict]；解析失败时保留原文，报告退化为 Markdown 展示。
  */
-class AiStage(private val reviewer: AiReviewer?) : StageRunner {
+class AiStage(
+    private val reviewer: AiReviewer?,
+    /** 联网来源核验：与 AI 研判并发，结果单独写 provenance.json 供 S6 使用。 */
+    private val provenance: com.modradar.app.provenance.ProvenanceStep? = null,
+) : StageRunner {
 
     override val stage: Stage = Stage.AI
 
@@ -26,8 +32,13 @@ class AiStage(private val reviewer: AiReviewer?) : StageRunner {
     override suspend fun run(
         ctx: StageContext,
         onProgress: (Int, String) -> Unit,
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO) { coroutineScope {
         onProgress(10, "准备 AI 研判")
+        val prov = async {
+            runCatching {
+                provenance?.run(ctx.targetPath, ctx.targetName, ctx.targetKind.name, ctx::read, ctx::write)
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+        }
 
         val result: AiReviewResult = if (reviewer == null) {
             AiReviewResult(
@@ -50,6 +61,8 @@ class AiStage(private val reviewer: AiReviewer?) : StageRunner {
             }
         }
 
+        if (!prov.isCompleted) onProgress(90, "等待联网来源核验")
+        prov.await()
         ctx.checkPause()
 
         val artifact = AiReviewArtifact(
@@ -58,6 +71,7 @@ class AiStage(private val reviewer: AiReviewer?) : StageRunner {
             toolCalls = result.toolCalls,
             model = result.model,
             error = result.error,
+            verdict = if (result.status == AiReviewResult.DONE) AiVerdictParser.parse(result.summary) else null,
         )
         ctx.write(ctx.artifactName(stage), json.encodeToString(artifact))
 
@@ -69,5 +83,5 @@ class AiStage(private val reviewer: AiReviewer?) : StageRunner {
                 else -> "AI 研判失败：${result.error.orEmpty()}"
             },
         )
-    }
+    } }
 }

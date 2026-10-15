@@ -78,6 +78,73 @@ object RootShell {
         }.getOrDefault(emptyList())
     }
 
+    /**
+     * 把已安装模块目录只读打包成 zip（供流水线分析）：`ls -1RF` 列树 + `cat` 读文件。
+     * 跳过符号链接（目标可能在模块目录之外）、路径含非常规字符的文件；超出上限即截断。
+     * @return 打包的文件数；读不到 module.prop 时返回 0 并删除半成品。
+     */
+    const val PACKED_COMMENT = "ModRadar:packed-from-device:"
+
+    /** zip 是否由 [packModule] 从设备模块目录打包。 */
+    fun isPackedFromDevice(zip: File): Boolean =
+        runCatching { java.util.zip.ZipFile(zip).use { it.comment?.startsWith(PACKED_COMMENT) == true } }.getOrDefault(false)
+
+    fun packModule(dir: String, dest: File, maxBytes: Long = 64L shl 20, maxFiles: Int = 3000): Int {
+        if (!isSafePath(dir)) return 0
+        val listing = exec(listOf("ls", "-1RF", dir)) ?: return 0
+        val files = parseTree(dir, listing, maxFiles)
+        if ("$dir/module.prop" !in files) return 0
+        var total = 0L
+        var count = 0
+        java.util.zip.ZipOutputStream(dest.outputStream().buffered()).use { zip ->
+            // 标记来源：来源核验据此知道整包哈希不可比，只能逐文件比
+            zip.setComment(PACKED_COMMENT + dir)
+            for (f in files) {
+                val bytes = execBytes(listOf("cat", f)) ?: continue
+                if (total + bytes.size > maxBytes) break
+                total += bytes.size
+                zip.putNextEntry(java.util.zip.ZipEntry(f.removePrefix("$dir/")))
+                zip.write(bytes)
+                zip.closeEntry()
+                count++
+            }
+        }
+        if (count == 0) dest.delete()
+        return count
+    }
+
+    /** 解析 `ls -1RF` 输出为文件完整路径（不含目录、符号链接、管道、套接字）。 */
+    internal fun parseTree(dir: String, listing: String, maxFiles: Int = 3000): List<String> {
+        val files = mutableListOf<String>()
+        var current = dir
+        for (raw in listing.lineSequence()) {
+            val line = raw.trimEnd()
+            if (line.isEmpty()) continue
+            if (line.endsWith(":") && line.startsWith("/")) { current = line.dropLast(1).trimEnd('/'); continue }
+            val name = when (line.last()) {
+                '/', '@', '|', '=' -> continue
+                '*' -> line.dropLast(1)
+                else -> line
+            }
+            val full = "$current/$name"
+            if (isSafePath(full)) files += full
+            if (files.size >= maxFiles) break
+        }
+        return files
+    }
+
+    private fun execBytes(args: List<String>): ByteArray? {
+        if (args.size != 2 || args[0] != "cat" || !isSafePath(args[1])) return null
+        val cmd = "su -c " + shellQuote(args.joinToString(" "))
+        return runCatching {
+            val p = ProcessBuilder("sh", "-c", cmd).redirectErrorStream(false).start()
+            val out = p.inputStream.readBytes()
+            p.waitFor(TIMEOUT_SEC.toLong(), TimeUnit.SECONDS)
+            if (p.isAlive) p.destroy()
+            out.takeIf { p.exitValue() == 0 }
+        }.getOrNull()
+    }
+
     /** 执行 `su -c "<args joined>"`，返回 stdout；失败返回 null。 */
     private fun exec(args: List<String>): String? {
         val cmd = "su -c " + shellQuote(args.joinToString(" "))

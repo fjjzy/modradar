@@ -31,7 +31,7 @@ class ScoreStage : StageRunner {
         ctx.checkPause()
         onProgress(60, "按规则表计算评分")
 
-        val artifact = ScoreRules.evaluate(extract, chain)
+        val artifact = ScoreRules.evaluate(extract, chain, ctx.targetKind.name)
         ctx.write(ctx.artifactName(stage), json.encodeToString(artifact))
 
         onProgress(100, "评分完成 · ${artifact.score} 分（${artifact.level}）")

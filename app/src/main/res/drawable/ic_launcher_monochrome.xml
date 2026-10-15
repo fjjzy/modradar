@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主题图标（Android 13+ 单色图层）：三圈雷达 + 扫描线 + 目标点，落在 72dp 安全区内 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.5"
+        android:pathData="M54,30a24,24 0,1 1,0 48a24,24 0,1 1,0 -48z M54,40a14,14 0,1 1,0 28a14,14 0,1 1,0 -28z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M54,54L54,28" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,51a3,3 0,1 1,0 6a3,3 0,1 1,0 -6z M68,38a4,4 0,1 1,0 8a4,4 0,1 1,0 -8z" />
+</vector>

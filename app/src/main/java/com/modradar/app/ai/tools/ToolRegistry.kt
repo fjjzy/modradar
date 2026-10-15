@@ -22,35 +22,41 @@ import kotlinx.serialization.json.jsonPrimitive
 class ToolRegistry(
     private val repo: TaskRepository,
     private val store: ArtifactStore,
+    /** 外部 MCP 透传工具（按需并入，名称带 ext_ 前缀）。 */
+    private val external: () -> List<ToolSpec> = { emptyList() },
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
-    val specs: List<ToolSpec> = buildList {
+    private val builtin: List<ToolSpec> = buildList {
         add(listStagesTool())
         add(readArtifactTool())
         add(readManifestTool())
         add(listPermissionsTool())
         add(listComponentsTool())
         add(scanShellHintsTool())
+        add(nativeImportsTool())
         add(capabilityChainTool())
         add(scoreBreakdownTool())
         add(getReportTool())
-        add(decompileClassTool())
     }
 
-    val byName: Map<String, ToolSpec> = specs.associateBy { it.name }
+    val specs: List<ToolSpec> get() = builtin + external()
+
+    val byName: Map<String, ToolSpec> get() = specs.associateBy { it.name }
 
     /** 供 function calling 使用的 OpenAI 兼容 tools 数组。 */
-    fun toolsJson(): String = buildString {
-        append("[")
-        specs.forEachIndexed { i, s ->
-            if (i > 0) append(",")
-            append("""{"type":"function","function":{"name":"${s.name}","description":""")
-            append(s.description.replace("\"", "'"))
-            append("""","parameters":${s.parameters}}}""")
+    fun toolsJson(): String = kotlinx.serialization.json.JsonArray(
+        specs.map { s ->
+            buildJsonObject {
+                put("type", JsonPrimitive("function"))
+                put("function", buildJsonObject {
+                    put("name", JsonPrimitive(s.name))
+                    put("description", JsonPrimitive(s.description))
+                    put("parameters", s.parameters)
+                })
+            }
         }
-        append("]")
-    }
+    ).toString()
 
     suspend fun invoke(taskId: String, name: String, args: JsonObject): ToolResult {
         val spec = byName[name] ?: return ToolResult.Error("未知工具：$name")
@@ -191,14 +197,14 @@ class ToolRegistry(
 
     private fun scoreBreakdownTool() = ToolSpec(
         name = "score_breakdown",
-        description = "规则评分明细与扣分依据（AI 结论不计入该分数）。",
+        description = "规则评分明细与扣分依据（统一分：100 − Σ扣分，AI 复核修正已计入）。",
         parameters = obj(),
         requiredStages = setOf(Stage.SCORE),
     ) { inv ->
         val art = store.readText(inv.taskId, "${Stage.SCORE.id}.json")
             ?.let { runCatching { json.decodeFromString<ScoreArtifact>(it) }.getOrNull() }
             ?: return@ToolSpec ToolResult.Error("无 S4 产物")
-        val head = "总分 ${art.score}（${art.level}），累计扣分 ${art.totalDeduction}"
+        val head = "本地规则基线 ${art.score}（${art.level}），累计扣分 ${art.totalDeduction}（S6 报告在此基础上叠加 AI 复核修正）"
         val body = art.findings.joinToString("\n") { f ->
             "[${f.severity}] ${f.ruleId} ${f.title} ${f.deduction} — ${f.detail}"
         }
@@ -218,22 +224,35 @@ class ToolRegistry(
         ToolResult.Ok(
             buildString {
                 append("目标：${rep.targetName}（${rep.targetKind}）\n")
-                append("总分：${rep.score}（${rep.level}），累计扣分 ${rep.totalDeduction}\n")
+                append("总分：${rep.score}（${rep.level}），累计扣分 ${rep.totalDeduction}")
+                if (rep.aiAdjustment != 0) append("，AI 调整 ${rep.aiAdjustment}（正=误报退回，负=加重/补充扣分）")
+                append("\n")
                 append("分级：高危 ${rep.highCount} / 中危 ${rep.mediumCount} / 低危 ${rep.lowCount}\n")
                 append("能力链命中：${rep.chains.size} 条\n")
-                append("AI 研判状态：${rep.aiStatus}（AI 结论不计入总分）\n")
-                rep.aiSummary?.let { append("AI 结论摘要：${it.take(1200)}\n") }
+                append("AI 研判状态：${rep.aiStatus}\n")
+                rep.aiVerdict?.let { v ->
+                    if (v.verdict.isNotBlank()) append("AI 定性：${v.verdict}\n")
+                }
                 if (rep.notes.isNotEmpty()) append("注意：" + rep.notes.joinToString("；"))
             }.take(6000)
         )
     }
 
-    private fun decompileClassTool() = ToolSpec(
-        name = "decompile_class",
-        description = "反编译指定类为 Java 源码。",
-        parameters = obj("class_name" to strProp("完整类名")),
+    private fun nativeImportsTool() = ToolSpec(
+        name = "native_imports",
+        description = "列出 native 库（.so）的 DT_NEEDED 依赖与安全相关导入符号（dlopen/mprotect/exec/ptrace/网络），以及 C8 命中情况。",
+        parameters = obj(),
         requiredStages = setOf(Stage.EXTRACT),
-    ) { ToolResult.Error("反编译能力尚未接入（S3 阶段实现）") }
+    ) { inv ->
+        val libs = extractArtifact(inv.taskId)?.nativeImports.orEmpty()
+        if (libs.isEmpty()) return@ToolSpec ToolResult.Ok("无 native 库，或未能解析 ELF")
+        ToolResult.Ok(
+            libs.joinToString("\n") { l ->
+                "${l.path}${if (l.c8) " [C8]" else ""}: 导入 ${l.importCount} 个；关注 ${l.interesting.joinToString(", ").ifEmpty { "无" }}；" +
+                    "依赖 ${l.needed.joinToString(", ").ifEmpty { "无" }}"
+            }.take(6000)
+        )
+    }
 
     // ---- 辅助 ----
 

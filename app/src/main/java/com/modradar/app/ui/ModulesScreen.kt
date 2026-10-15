@@ -1,198 +1,166 @@
 package com.modradar.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.Checkbox
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.modradar.app.Navigator
+import com.modradar.app.Route
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.modradar.app.scan.ksu.KsuModuleInfo
-import com.modradar.app.scan.xposed.XposedModuleInfo
+import com.modradar.app.scan.ksu.ScriptRisk
+import com.modradar.app.ui.components.Banner
+import com.modradar.app.ui.components.EmptyState
+import com.modradar.app.ui.components.MrCard
+import com.modradar.app.ui.components.Tag
+import com.modradar.app.ui.theme.RiskColors
 
-/**
- * 已安装模块页：Xposed 模块（免 root）+ KSU/Magisk 模块（root 只读）。
- */
-@OptIn(ExperimentalMaterial3Api::class)
+/** KSU / Magisk 模块（root 只读）。 */
 @Composable
-fun ModulesScreen(
-    vm: AppViewModel,
-    onBack: () -> Unit,
-    onOpenTask: (String) -> Unit,
-) {
-    val xposed by vm.xposedModules.collectAsStateWithLifecycle()
+fun KsuTab(vm: AppViewModel, nav: Navigator) {
     val ksu by vm.ksuModules.collectAsStateWithLifecycle()
+    val risks by vm.ksuRisks.collectAsStateWithLifecycle()
     val root by vm.rootAvailable.collectAsStateWithLifecycle()
     val scanning by vm.moduleScanning.collectAsStateWithLifecycle()
     val error by vm.moduleError.collectAsStateWithLifecycle()
+    val busy by vm.busy.collectAsStateWithLifecycle()
+    var selected by remember { mutableStateOf(setOf<String>()) }
 
-    LaunchedEffect(Unit) {
-        vm.scanXposedModules()
-        vm.scanKsuModules()
-    }
+    LaunchedEffect(Unit) { vm.scanKsuModules() }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("已安装模块") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("返回") } },
-            )
-        },
-    ) { pad ->
-        LazyColumn(
-            modifier = Modifier.padding(pad).fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { vm.scanXposedModules(); vm.scanKsuModules() },
-                        enabled = !scanning,
-                    ) { Text(if (scanning) "扫描中…" else "重新扫描") }
-                }
-            }
-
-            error?.let {
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF3A2E12))) {
-                        Text(it, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-
-            item {
-                SectionHeader("Xposed 模块（${xposed.size}）")
-            }
-            if (xposed.isEmpty()) {
-                item { Hint("未发现 Xposed 模块。") }
-            }
-            items(xposed) { m -> XposedCard(m) { vm.analyzeInstalledApk(m.apkPath ?: "", m.label, onOpenTask) } }
-
-            item {
-                SectionHeader(
-                    when (root) {
-                        true -> "KSU / Magisk 模块（${ksu.size}）"
-                        false -> "KSU / Magisk 模块（需 root）"
-                        null -> "KSU / Magisk 模块"
-                    }
-                )
-            }
-            if (root == false) {
-                item { Hint("未获取 root，无法读取模块目录。zip 包可直接选文件分析。") }
-            } else if (ksu.isEmpty()) {
-                item { Hint(if (scanning) "扫描中…" else "未发现模块，或模块目录为空。") }
-            }
-            items(ksu) { m -> KsuCard(m) }
-        }
-    }
-}
-
-@Composable
-private fun SectionHeader(text: String) {
-    Text(text, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
-}
-
-@Composable
-private fun Hint(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-@Composable
-private fun XposedCard(m: XposedModuleInfo, onAnalyze: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(14.dp)) {
-            Text(m.label, style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "${m.packageName}${m.versionName?.let { " · $it" } ?: ""}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            m.description?.let {
-                Spacer(Modifier.height(4.dp))
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "激活状态：未知（无公开 API，需 LSPosed 接口）",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            Button(onClick = onAnalyze) { Text("分析此模块") }
-        }
-    }
-}
-
-@Composable
-private fun KsuCard(m: KsuModuleInfo) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(14.dp)) {
+  Box(Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(m.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                Text(
-                    when (m.enabled) {
-                        true -> "已启用"
-                        false -> "已停用"
-                        null -> "未知"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (m.enabled == false) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.primary,
-                )
+                Text("/data/adb/modules · root 只读", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                // 进度圈与刷新按钮占同样 48dp，切换时不改变行高
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    if (scanning) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else IconButton(onClick = { vm.scanKsuModules() }) { Icon(Icons.Outlined.Refresh, "刷新") }
+                }
             }
-            Spacer(Modifier.height(4.dp))
+        }
+        item {
+            when (root) {
+                true -> Banner(Icons.Outlined.CheckCircle, "已获取 root · 只读模式，不修改任何文件", RiskColors.Low)
+                false -> Banner(Icons.Outlined.ErrorOutline, "未获取 root，无法读取 /data/adb/modules。模块 zip 可在「文件」或「文件夹」页分析", RiskColors.Medium)
+                null -> Banner(Icons.Outlined.Info, "正在检测 root…", MaterialTheme.colorScheme.outline)
+            }
+        }
+        error?.let { item { Banner(Icons.Outlined.Warning, it, RiskColors.Critical) } }
+
+        if (root == true && ksu.isEmpty() && !scanning) {
+            item { EmptyState(Icons.Outlined.Inventory2, "未发现模块", "/data/adb/modules 与 /data/adb/ksu/modules 均为空") }
+        }
+        items(ksu, key = { it.dir ?: it.id }) { m ->
+            val k = m.dir ?: m.id
+            KsuCard(m, risks[m.dir].orEmpty(), k in selected) { selected = if (k in selected) selected - k else selected + k }
+        }
+
+        item {
+            Text(
+                "仅执行 ls / cat / test 三类只读命令；分析时把模块文件只读复制到应用私有目录，不启停、不卸载、不挂载。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+        }
+        item { SelectionBarSpacer() }
+    }
+    SelectionBar(selected.size, busy, "读取模块文件…", onClear = { selected = emptySet() }) {
+        val pick = ksu.filter { (it.dir ?: it.id) in selected }
+        vm.analyzeKsuModules(pick) { ids ->
+            selected = emptySet()
+            if (ids.size == 1) nav.replace(Route.Task(ids.first())) else nav.replace(Route.History)
+        }
+    }
+  }
+}
+
+@Composable
+private fun KsuCard(m: KsuModuleInfo, risks: List<String>, checked: Boolean, onToggle: () -> Unit) {
+    val disabled = m.enabled == false
+    MrCard(
+        onClick = onToggle,
+        container = if (checked) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    m.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f),
+                    color = if (disabled) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface,
+                )
+                when (m.enabled) {
+                    true -> Tag("已启用", RiskColors.Low)
+                    false -> Tag("已停用", RiskColors.Neutral)
+                    null -> Tag("未知", RiskColors.Neutral)
+                }
+                Checkbox(checked = checked, onCheckedChange = { onToggle() })
+            }
             Text(
                 buildString {
                     append(m.id)
-                    m.version?.let { append(" · $it") }
-                    m.author?.let { append(" · $it") }
+                    m.version?.let { append(" · 版本 $it") }
+                    m.author?.let { append(" · 作者 $it") }
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             m.description?.let {
-                Spacer(Modifier.height(4.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (m.scripts.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "脚本：${m.scripts.joinToString(", ")}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    m.scripts.take(4).forEach { Tag(it, MaterialTheme.colorScheme.outline) }
+                }
             }
             if (m.missingFields.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "module.prop 缺失：${m.missingFields.joinToString("、")}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color(0xFFFFB300),
-                )
+                Text("module.prop 缺失：${m.missingFields.joinToString("、")}", style = MaterialTheme.typography.labelSmall, color = RiskColors.Medium)
+            }
+            risks.sortedBy { ScriptRisk.isNormal(it) }.take(5).forEach { r ->
+                // 改属性 / 挂载等是模块本职，只作灰色提示
+                val normal = ScriptRisk.isNormal(r)
+                val c = if (normal) MaterialTheme.colorScheme.outline else RiskColors.High
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (normal) Icons.Outlined.Info else Icons.Outlined.Warning, null, tint = c, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(r, style = MaterialTheme.typography.labelSmall, color = c)
+                }
             }
         }
     }

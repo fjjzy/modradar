@@ -42,19 +42,53 @@ class AnalysisService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val taskId = intent?.getStringExtra(EXTRA_TASK_ID) ?: currentTaskId
         when (intent?.action) {
-            ACTION_START, ACTION_RESUME -> if (taskId != null) begin(taskId)
+            ACTION_START, ACTION_RESUME -> if (taskId != null) enqueueOrBegin(taskId)
             ACTION_PAUSE -> {
-                pauseRequested.set(true)
-                taskId?.let { refreshNotification(it, Stage.LOAD, -1, paused = true, message = "正在暂停…") }
+                if (taskId != null && taskId != currentTaskId) {
+                    dequeue(taskId)
+                } else {
+                    pauseRequested.set(true)
+                    taskId?.let { refreshNotification(it, Stage.LOAD, -1, paused = true, message = "正在暂停…") }
+                }
             }
             ACTION_CANCEL -> if (taskId != null) cancelTask(taskId)
-            else -> if (taskId != null) begin(taskId)
+            else -> if (taskId != null) enqueueOrBegin(taskId)
         }
         return START_REDELIVER_INTENT
     }
 
+    /** 重操作全局串行：已有任务在跑时排队，跑完自动接下一个。 */
+    private fun enqueueOrBegin(taskId: String) {
+        if (job?.isActive == true && currentTaskId != taskId) {
+            if (taskId !in queue.value) queue.value = queue.value + taskId
+            promoteToForeground(currentTaskId ?: taskId)
+            return
+        }
+        begin(taskId)
+    }
+
+    private fun dequeue(taskId: String) {
+        queue.value = queue.value - taskId
+    }
+
+    /** 当前任务结束后：有排队则继续，否则退出前台。 */
+    private fun next() {
+        val nextId = queue.value.firstOrNull()
+        if (nextId != null) {
+            queue.value = queue.value.drop(1)
+            begin(nextId)
+        } else {
+            currentTaskId = null
+            running.value = null
+            stopForegroundCompat()
+            stopSelf()
+        }
+    }
+
     private fun begin(taskId: String) {
         currentTaskId = taskId
+        running.value = taskId
+        dequeue(taskId)
         pauseRequested.set(false)
 
         // 必须尽快进入前台；通知权限被拒时仍可运行，只是通知不可见
@@ -65,6 +99,7 @@ class AnalysisService : Service() {
             val outcome = app.pipeline.run(
                 taskId = taskId,
                 onProgress = { stage, pct, msg ->
+                    appendLog(taskId, "${stage.id} · $msg")
                     refreshNotification(taskId, stage, pct, paused = false, message = msg)
                 },
                 isPauseRequested = { pauseRequested.get() },
@@ -72,35 +107,27 @@ class AnalysisService : Service() {
             when (outcome) {
                 is PipelineOutcome.Done -> {
                     refreshNotification(taskId, Stage.REPORT, 100, paused = false, message = "完成")
-                    stopForegroundCompat()
-                    stopSelf()
                 }
                 is PipelineOutcome.Paused -> {
                     refreshNotification(taskId, outcome.atStage, -1, paused = true, message = outcome.reason)
-                    if (outcome.reason != "用户暂停") {
-                        // 阶段未实现：不占用前台服务，保留可续跑状态
-                        stopForegroundCompat()
-                        stopSelf()
-                    }
                 }
                 is PipelineOutcome.Failed -> {
                     refreshNotification(taskId, outcome.atStage ?: Stage.LOAD, -1, paused = false, message = "失败：${outcome.message}")
-                    stopForegroundCompat()
-                    stopSelf()
                 }
             }
+            next()
         }
     }
 
     private fun cancelTask(taskId: String) {
-        job?.cancel()
+        dequeue(taskId)
+        val wasCurrent = taskId == currentTaskId
+        if (wasCurrent) job?.cancel()
         scope.launch {
             app.repo.delete(taskId)
             app.store.deleteTask(taskId)
-            app.repo.setState(taskId, TaskState.IDLE)
         }
-        stopForegroundCompat()
-        stopSelf()
+        if (wasCurrent) next()
     }
 
     /** Android 15+：dataSync 前台服务超时回调，先落盘再停，不留半截状态。 */
@@ -178,6 +205,24 @@ class AnalysisService : Service() {
         const val ACTION_RESUME = "com.modradar.app.action.RESUME"
         const val ACTION_CANCEL = "com.modradar.app.action.CANCEL"
         const val EXTRA_TASK_ID = "taskId"
+
+        /** 排队中的任务 ID（UI 展示「排队中」）。 */
+        val queue = kotlinx.coroutines.flow.MutableStateFlow<List<String>>(emptyList())
+
+        /** 正在执行的任务 ID。 */
+        val running = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+        /** 运行日志（仅内存，供进度页实时展示）：taskId → 行。 */
+        val logs = kotlinx.coroutines.flow.MutableStateFlow<Map<String, List<String>>>(emptyMap())
+
+        private val logTime = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+
+        fun appendLog(taskId: String, line: String) {
+            val cur = logs.value[taskId].orEmpty()
+            if (cur.lastOrNull()?.endsWith(line) == true) return
+            val stamped = "${logTime.format(java.util.Date())}  $line"
+            logs.value = logs.value + (taskId to (cur + stamped).takeLast(200))
+        }
 
         fun start(ctx: Context, taskId: String) = send(ctx, ACTION_START, taskId)
         fun pause(ctx: Context, taskId: String) = send(ctx, ACTION_PAUSE, taskId)

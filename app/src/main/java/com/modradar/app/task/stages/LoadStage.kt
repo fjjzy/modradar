@@ -48,6 +48,8 @@ class LoadStage : StageRunner {
                 isXposed = reader.manifestBytes
                     ?.let { ManifestAnalyzer.analyze(it)?.isXposedModule }
                     ?: false
+                // 新式模块（libxposed API）不写 meta-data，只有入口清单文件
+                isXposed = isXposed || reader.has("assets/xposed_init") || reader.has("META-INF/xposed/java_init.list")
 
                 kind = when {
                     hasModuleProp -> TargetKind.KSU_MODULE
